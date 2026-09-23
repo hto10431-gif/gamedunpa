@@ -15,7 +15,8 @@ const AUCTION_HOURS = 48;
 const AUCTION_FEE = 0.05;
 
 /* ───────────── DB (SQLite 파일 또는 DATABASE_URL 이 있으면 PostgreSQL) ───────────── */
-let DB;
+let DB, DB_TARGET = '', DB_STATE = 'connecting', DB_ERROR = '';
+function errText(e) { if (!e) return '?'; const parts = [e.code, e.message].filter(Boolean); if (e.errors) for (const x of e.errors) parts.push(`[${x.code || ''} ${x.address || ''}:${x.port || ''} ${x.message || ''}]`); return parts.join(' ') || String(e); }
 const SCHEMA_SQLITE = `
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, pw TEXT, created INTEGER);
@@ -41,10 +42,15 @@ async function openDB() {
   if (process.env.DATABASE_URL) {
     const { Pool, types } = require('pg');
     types.setTypeParser(20, v => Number(v)); types.setTypeParser(1700, v => Number(v));
-    let url = process.env.DATABASE_URL.trim().replace(/^psql\s+'?|'$/g, '');
-    try { const u = new URL(url); u.searchParams.delete('channel_binding'); url = u.toString(); } catch {}
+    // 복사할 때 섞여 들어간 psql '...', DATABASE_URL=, 따옴표, 줄바꿈/공백을 정리해요
+    let url = process.env.DATABASE_URL.trim().replace(/^DATABASE_URL\s*=\s*/i, '').replace(/^psql\s+/, '').replace(/^['"]|['"]$/g, '').replace(/\s+/g, '');
+    try { const u = new URL(url); u.searchParams.delete('channel_binding'); u.searchParams.delete('sslmode'); url = u.toString(); } catch {}
     const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
-    const pool = new Pool({ connectionString: url, ssl: local ? false : { rejectUnauthorized: false }, max: 5 });
+    try { const u = new URL(url); DB_TARGET = `${u.protocol}//${u.username || '?'}:${u.password ? '(비밀번호 있음)' : '(비밀번호 없음!)'}@${u.hostname}:${u.port || 5432}${u.pathname}`; }
+    catch { DB_TARGET = '(주소 형식이 올바르지 않아요: postgresql:// 로 시작해야 해요)'; }
+    console.log('DB 접속 대상:', DB_TARGET);
+    const pool = new Pool({ connectionString: url, ssl: local ? false : { rejectUnauthorized: false }, max: 5, connectionTimeoutMillis: 15000 });
+    pool.on('error', e => console.error('DB 연결 오류:', errText(e)));
     const conv = sql => { let i = 0; return sql.replace(/\?/g, () => '$' + (++i)); };
     DB = {
       kind: 'PostgreSQL',
@@ -157,7 +163,7 @@ function serveStatic(req, res, p) {
 const routes = {};
 const route = (m, p, fn, auth = true) => { routes[m + ' ' + p] = { fn, auth }; };
 
-route('GET', '/api/ping', async () => ({ ok: true, name: '잿빛 균열', online: online.size }), false);
+route('GET', '/api/ping', async () => ({ ok: DB_STATE === 'ready', name: '잿빛 균열', online: online.size, db: DB_STATE, dbError: DB_ERROR || undefined }), false);
 
 route('POST', '/api/register', async (b, u, req) => {
   if (limited('reg:' + req.ip, 8)) throw [429, '잠시 후 다시 시도해 주세요'];
@@ -311,6 +317,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'Access-Control-Allow-Origin': res.cors, 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS', 'Access-Control-Max-Age': '86400', 'Vary': 'Origin' }); return res.end(); }
   const r = routes[req.method + ' ' + url.pathname];
   if (!r) return send(res, 404, { error: '없는 주소예요' });
+  if (DB_STATE !== 'ready' && url.pathname !== '/api/ping') return send(res, 503, { error: '서버가 준비 중이에요. 잠시 후 다시 시도해 주세요' });
   try {
     const auth = req.headers.authorization || ''; req.token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     const user = await userFromToken(req.token);
@@ -470,8 +477,18 @@ server.on('upgrade', (req, sock, head) => {
   }).catch(() => sock.destroy());
 });
 
-openDB().then(() => server.listen(PORT, () => {
-  console.log(`잿빛 균열 서버 실행 중 → http://localhost:${PORT}  [저장소: ${DB.kind}]`);
+// 포트를 먼저 열고(호스팅의 포트 검사 통과), DB는 뒤에서 연결·재시도해요
+server.listen(PORT, () => {
+  console.log(`잿빛 균열 서버 실행 중 → http://localhost:${PORT}`);
   const nets = require('node:os').networkInterfaces();
   for (const list of Object.values(nets)) for (const n of list || []) if (n.family === 'IPv4' && !n.internal) console.log(`  같은 와이파이의 폰에서 → http://${n.address}:${PORT}`);
-})).catch(e => { console.error('DB 연결 실패:', e.message); process.exit(1); });
+});
+(async function connectLoop(n = 1) {
+  try { await openDB(); DB_STATE = 'ready'; DB_ERROR = ''; console.log(`저장소 연결 완료 [${DB.kind}]`); }
+  catch (e) {
+    DB_STATE = 'error'; DB_ERROR = errText(e);
+    console.error(`DB 연결 실패 (${n}번째 시도): ${DB_ERROR}`);
+    if (DB_TARGET) console.error('  접속 대상:', DB_TARGET, '— Render의 DATABASE_URL 값을 확인해 주세요');
+    setTimeout(() => connectLoop(n + 1), Math.min(60000, 5000 * n));
+  }
+})();
