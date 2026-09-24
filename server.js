@@ -100,7 +100,7 @@ setInterval(() => { const t = now(); for (const [k, b] of buckets) if (t - b.t >
 
 /* ───────────── records / boards ───────────── */
 // time:<dungeonId>:<diffIndex> (낮을수록 좋음, 초) · tower (층, 높을수록) · level (레벨*1e9+누적경험, 높을수록)
-const DUNGEON_IDS = ['ash', 'frost', 'void', 'raid'];
+const DUNGEON_IDS = ['ash', 'frost', 'void', 'raid', 'dune', 'sun'];
 function boardSpec(board) {
   if (board === 'tower') return { asc: false, min: 1, max: 2000 };
   if (board === 'level') return { asc: false, min: 1, max: 1e12 };
