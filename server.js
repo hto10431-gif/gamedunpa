@@ -100,7 +100,7 @@ setInterval(() => { const t = now(); for (const [k, b] of buckets) if (t - b.t >
 
 /* ───────────── records / boards ───────────── */
 // time:<dungeonId>:<diffIndex> (낮을수록 좋음, 초) · tower (층, 높을수록) · level (레벨*1e9+누적경험, 높을수록)
-const DUNGEON_IDS = ['ash', 'frost', 'void', 'raid', 'dune', 'sun'];
+const DUNGEON_IDS = ['ash', 'frost', 'void', 'raid', 'dune', 'sun', 'chron', 'raid2', 'storm', 'grove', 'throne'];
 function boardSpec(board) {
   if (board === 'tower') return { asc: false, min: 1, max: 2000 };
   if (board === 'level') return { asc: false, min: 1, max: 1e12 };
@@ -382,7 +382,7 @@ wss.on('connection', (ws, req, user) => {
     switch (m.t) {
       case 'hello': {
         const L = m.look || {};
-        c.look = { cls: cleanText(L.cls, 12), wear: L.wear && typeof L.wear === 'object' ? L.wear : {}, dye: L.dye && typeof L.dye === 'object' ? L.dye : {}, adv: cleanText(L.adv, 16), title: cleanText(L.title, 30), lv: +L.lv | 0 };
+        c.look = { cls: cleanText(L.cls, 12), wear: L.wear && typeof L.wear === 'object' ? L.wear : {}, dye: L.dye && typeof L.dye === 'object' ? L.dye : {}, adv: cleanText(L.adv, 16), title: cleanText(L.title, 30), lv: +L.lv | 0, enh: Math.min(10, Math.max(0, +L.enh | 0)) };
         if (JSON.stringify(c.look).length > 3000) c.look.dye = {};
         if (c.loc === 'town') broadcastAll({ t: 'pj', p: pub(c) }, c.uid, 'town');
         if (p) pushParty(p);
